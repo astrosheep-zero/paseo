@@ -110,16 +110,6 @@ await client.close();
 
 `sandbox.filesystem` takes `allowWrite`, `denyWrite`, `allowRead`, and `denyRead`. `sandbox.network` takes `allowedDomains`, `deniedDomains`, `strictAllowlist`, and proxy settings.
 
-## Muse Code
-
-Muse starts with its sandbox disabled and workspace trust enabled. Set
-`options: { sandbox: { enabled: true, network: "proxy-only" }, trustWorkspace: false }`
-to restore sandboxing and skip project-scoped rules and configuration for one agent.
-`sandbox.network` accepts `"proxy-only"`, `"restricted"`, or `"enabled"`; it only applies
-when the sandbox is enabled. Options persist across refresh and resume.
-
-See [Muse Code](/docs/muse-code#per-agent-options) for a create-agent example and defaults.
-
 ## OpenCode
 
 Allow reads and edits, deny anything that reaches outside the project, and gate shell commands by pattern:
