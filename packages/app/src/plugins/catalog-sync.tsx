@@ -25,7 +25,9 @@ export function PluginCatalogSync({
       return;
     }
     if (!connected) {
-      pluginRegistry.removeHost(serverId);
+      // Keep the last catalog while the host is temporarily offline. The
+      // connection may recover without changing the plugin installation, and
+      // removing it here makes the timeline fall back to native rendering.
       return;
     }
     const refresh = (replacePluginId?: string) => {

@@ -88,6 +88,18 @@ describe("PluginRegistry", () => {
     expect(snapshots).toEqual([["example"]]);
   });
 
+  it("does not publish when reconnecting with the same catalog", () => {
+    const clientBundle = bundle("one");
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle }]);
+    let updates = 0;
+    const unsubscribe = pluginRegistry.subscribe(() => updates++);
+
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle }]);
+
+    unsubscribe();
+    expect(updates).toBe(0);
+  });
+
   it("reports timeline contribution changes", () => {
     const first = timelineBundle("one");
     expect(pluginRegistry.installCatalog("host-a", [{ id: "reports", clientBundle: first }])).toBe(
