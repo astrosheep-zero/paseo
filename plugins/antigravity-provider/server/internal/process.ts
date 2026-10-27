@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnProcess } from "@getpaseo/plugin/server";
 import { signalProcess } from "./signals.js";
 import { createInterface } from "node:readline";
 import type { ProviderLaunch, ProviderSessionConfig } from "@getpaseo/plugin/server/provider";
@@ -41,16 +42,15 @@ function driverArgs(options: DriverOptions): string[] {
     "--add-dir",
     config.cwd,
     "--disable-slash-commands",
+    "--dangerously-skip-permissions",
   ];
   if (config.model) args.push("--model", config.model);
-  if (config.mode === "accept-edits" || config.mode === "plan") args.push("--mode", config.mode);
-  if (config.mode === "full-access") args.push("--dangerously-skip-permissions");
   if (conversationId) args.push("--conversation", conversationId);
   return args;
 }
 
 export function startDriver(options: DriverOptions): Driver {
-  const child = spawn(options.launch.command, driverArgs(options), {
+  const child = spawnProcess(options.launch.command, driverArgs(options), {
     cwd: options.config.cwd,
     env: { ...options.launch.env, ...options.config.env },
     detached: process.platform !== "win32",
@@ -184,7 +184,7 @@ interface ProbeOptions {
 }
 export function probe(options: ProbeOptions): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(options.launch.command, [...options.launch.args, ...options.args], {
+    const child = spawnProcess(options.launch.command, [...options.launch.args, ...options.args], {
       env: options.launch.env,
       cwd: options.cwd,
       stdio: "pipe",

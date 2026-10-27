@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { pluginRegistry as registry } from "./registry";
 
+const audio = { play: async () => 0 };
+
 vi.mock("./navigation", () => ({
   createPluginNavigation: () => ({}),
 }));
@@ -30,7 +32,7 @@ const pluginRegistry = {
     return registry.installCatalog(
       serverId,
       catalog.map((entry) => ({ ...entry, requirements: { paseo: `>=${appPackage.version}` } })),
-      { ...options, client: daemonClient },
+      { ...options, client: daemonClient, audio },
     );
   },
 };
@@ -84,6 +86,18 @@ describe("PluginRegistry", () => {
     unsubscribe();
 
     expect(snapshots).toEqual([["example"]]);
+  });
+
+  it("does not publish when reconnecting with the same catalog", () => {
+    const clientBundle = bundle("one");
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle }]);
+    let updates = 0;
+    const unsubscribe = pluginRegistry.subscribe(() => updates++);
+
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle }]);
+
+    unsubscribe();
+    expect(updates).toBe(0);
   });
 
   it("reports timeline contribution changes", () => {

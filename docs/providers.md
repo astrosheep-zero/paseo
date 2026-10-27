@@ -10,7 +10,9 @@ Keep a bundled provider in `plugins/<id>/` and register it through
 import rules belong to [plugins.md](plugins.md#built-in-plugins); the
 [public provider guide](../public-docs/plugins/providers.md) covers the provider contract.
 
-The plugin owns the CLI transport, session state, catalog, and capabilities. The daemon owns
+The plugin owns the CLI transport, session state, catalog, and capabilities. Launch CLI transports
+and probes through the [SDK process helpers](../public-docs/plugins/providers.md#launch-the-provider-cli),
+which share Windows launcher handling with core providers. The daemon owns
 executable resolution and applies `agents.providers.<provider-id>.command` and `env` before
 connecting. Register the provider's icon with the plugin rather than adding it to the app's
 provider icon map. You do not need a core manifest entry or provider factory.
@@ -22,47 +24,15 @@ provider icon map. You do not need a core manifest entry or provider factory.
 
 ## Provider-native session options
 
-`AgentSessionConfig.providerOptions` carries JSON-safe configuration for the selected provider. The
-names and nesting are the provider's native contract; options are not portable between providers.
-Paseo validates the object with the selected provider's strict schema before constructing a session.
-Unknown keys fail with their `providerOptions.*` path. Paseo-owned controls such as cwd, model,
-prompt, environment, session identity, MCP transport, callbacks, and hooks are not accepted as
-top-level provider options.
+The provider owns validation and application of the opaque record in
+`AgentSessionConfig.providerOptions`. The registry supplies the effective options
+at session startup. See [provider configuration](custom-providers.md#provider-options)
+for defaults and merge rules, and the [SDK guide](../public-docs/sdk/provider-options.md)
+for native keys and examples.
 
-This Paseo version accepts these keys:
-
-- **Codex:** `approval_policy`, `sandbox_mode`,
-  `sandbox_workspace_write.{writable_roots,network_access,exclude_slash_tmp,exclude_tmpdir_env_var}`,
-  `web_search`, `features.multi_agent_v2`, and `features.network_proxy`. A network proxy object may
-  contain `enabled`, `proxy_url`, `socks_url`, `enable_socks5`, `enable_socks5_udp`,
-  `allow_local_binding`, `allow_upstream_proxy`, `dangerously_allow_all_unix_sockets`,
-  `dangerously_allow_non_loopback_proxy`, `domains`, and `unix_sockets`. See the
-  [Codex configuration reference](https://developers.openai.com/codex/config-reference).
-- **Claude:** `allowedTools`, `disallowedTools`, `additionalDirectories`, `extraArgs`, `sandbox`, and
-  `settings`. `providerOptions.extraArgs` passes the SDK's documented
-  [`Options.extraArgs`](https://platform.claude.com/docs/en/agent-sdk/typescript#options) map
-  unchanged: keys omit the leading `--`, string values supply an argument value, and `null`
-  supplies a boolean flag. For example, `providerOptions: { extraArgs: { chrome: null } }`
-  passes `--chrome`, and `providerOptions: { extraArgs: { model: "x" } }` passes `--model x`.
-  Set it in session configuration or a plugin's `server.before("agent.create", ...)` hook; see
-  [plugin configuration hooks](../public-docs/plugins/reference.md#change-configuration-and-inject-an-mcp-server). Values are literal;
-  shell expressions such as `$(command)` are not evaluated. The accepted sandbox
-  fields cover enablement, fail-if-unavailable behavior, excluded and unsandboxed commands,
-  filesystem read/write rules, network domain/socket/local-binding rules, weaker nested
-  sandboxing, ignored violations, and the ripgrep command. `settings` accepts native
-  `permissions.{allow,ask,deny}` and sandbox settings. See the
-  [Claude Agent SDK TypeScript reference](https://platform.claude.com/docs/en/agent-sdk/typescript)
-  and [Claude settings reference](https://code.claude.com/docs/en/settings).
-- **OpenCode:** `permission`, either one `ask`/`allow`/`deny` action or the native per-tool rule
-  object. Supported entries are `read`, `edit`, `glob`, `grep`, `list`, `bash`, `task`,
-  `external_directory`, `todowrite`, `question`, `webfetch`, `websearch`, `codesearch`,
-  `repo_clone`, `repo_overview`, `lsp`, `doom_loop`, and `skill`. See the
-  [OpenCode permissions reference](https://opencode.ai/docs/permissions/). OpenCode permissions are
-  application policy, not an OS sandbox.
-
-Each provider definition owns its option schema and exact MCP preapproval mapping. A new provider
-must fail closed for Hub unattended execution until it can approve one exact injected MCP server
-and tool identity without approving native tools.
+Exact MCP preapproval is a separate daemon-owned contract. A new provider must fail
+closed for Hub unattended execution until it can approve one exact injected MCP
+server and tool identity without approving native tools.
 
 ## Core adapter patterns
 
@@ -90,6 +60,8 @@ Implement the `AgentClient` and `AgentSession` interfaces from `agent-sdk-types.
 Core direct providers: `claude` (in `providers/claude/agent.ts`), `codex` (`codex-app-server-agent.ts`), `opencode` (`opencode/runtime-client.ts`), `pi` (`providers/pi/agent.ts`), and `omp` (`providers/omp/agent.ts`). The dev-only `mock` provider (`mock-load-test-agent.ts`) is also direct.
 
 Claude first-party model metadata lives in `packages/server/src/server/agent/providers/claude/model-manifest.ts`. When adding or updating a Claude model, update that manifest only; the model picker thinking options and Claude-specific feature gates are derived from the manifest. Do not add model-specific Claude capability lists in feature code.
+
+Keep the curated Claude catalog: `supportedModels()` has historically omitted older versions and carries less metadata. Discovery is only an opt-in visibility gate, not a replacement catalog or an entitlement guarantee. Claude Code v2.1.197 added `resolvedModel` to disambiguate alias rows; a bare family alias does not establish access to a particular version. Explicit user-configured models must remain selectable when discovery fails or omits them.
 
 Paseo tools are not implemented as MCP tools internally. They live in a shared tool catalog under `packages/server/src/server/agent/tools/`; MCP is only the fallback adapter. The daemon resolves `agents.providers.<provider>.paseoTools` by the exact provider ID. The catalog policy belongs to the caller: it filters the tools exposed to the current agent. When that agent calls `create_agent`, the child receives the policy for the child provider ID; the caller's policy is not inherited.
 
@@ -133,7 +105,7 @@ OpenCode owns user message IDs. Do not pass Paseo-generated IDs to OpenCode prom
 
 Active-turn steering is an optional `AgentSession.steerActiveTurn` operation. The manager owns admission against its exact foreground turn, canonical user-message creation, echo reconciliation, and falls back to the normal interrupt-and-replace path only when the adapter reports `unavailable`. An adapter error leaves the steer's fate ambiguous and must surface without an interrupt or retry. Codex calls `turn/steer` with the native expected turn and Paseo client user-message ID. Claude pushes an admitted steer into the exact active SDK query input; isolated control commands remain unavailable. OpenCode calls `session/prompt_async` with an OpenCode-generated message ID; the server queues the prompt while busy and the next LLM call in the same Paseo turn includes it. Pi sends its native `steer` RPC, which queues the message for delivery after the in-flight assistant turn's tool calls. Slash-command inputs report `unavailable` because pi rejects extension commands on the steer path, and echo identity is correlated by message text because pi's steer RPC takes no message ID. A missing session reports `unavailable` and uses the normal interrupt fallback.
 
-A steering adapter also owes its interrupt: stopping a turn must discard the steers the provider has not read yet, or one of them resumes the turn the user just stopped. Codex clears pending input when it aborts a turn; Claude does not, so its adapter cancels the SDK messages it queued before calling `query.interrupt()`. Pi requires `clear_queue` before `abort`; older binaries without that RPC retain their native queue behavior until the pi compatibility floor reaches 0.84.4.
+A steering adapter also owes its interrupt: stopping a turn must discard the steers the provider has not read yet, or one of them resumes the turn the user just stopped. Codex clears pending input when it aborts a turn; Claude does not, so its adapter cancels the SDK messages it queued before calling `query.interrupt()`. It calls `query.interrupt()` only while a main-session turn is in flight (between `system/init` and that turn's `result`): with the main session idle, an interrupt reaches only background subagents and no result follows it, so the adapter withdraws its unstarted messages and stops there. The adapter also declares `perTaskStopAffordance`, because without it the CLI kills every background subagent on interrupt. Pi requires `clear_queue` before `abort`; older binaries without that RPC retain their native queue behavior until the pi compatibility floor reaches 0.84.4.
 
 `SteerActiveTurnOptions.clearPendingPermissions` makes permission release part of the provider contract. A provider that accepts such a steer queues it first, denies permissions blocking its delivery, and stops once the steer is read. Steers without the flag leave permissions open. A denied plan remains in the timeline because the pending card was the only other copy of its text.
 
@@ -219,15 +191,10 @@ promise for completion: equal results, including equal discovery timestamps, emi
 
 ## Usage sources
 
-Usage is fetched on demand from plugin usage sources. Each source registers through `server.registerUsageSource()` with an input schema, `fetch(input)`, and required `discover()`. The daemon discovers configured accounts, validates inputs in the plugin runtime, caches each source/input result for five minutes, and returns `usage.list_reports.response`. A source report has an account key, availability status, plan label, windows, balances, and details.
-
-Create a built-in source under `plugins/<name>-usage-source/` with the same manifest, entry, `server/`, `shared/`, and `icon.svg` layout as an external plugin. Add its ID to `builtinPlugins` in `packages/server/src/server/plugins/builtin/index.ts`. Keep credential discovery, API parsing, and normalization inside the source; use helpers from `@getpaseo/plugin/server/usage`. The wire shape remains source agnostic. See [plugin usage sources](plugins.md#usage-sources).
-
-`provider.usage.list` remains a compatibility RPC for older apps. It maps discovered reports to `ProviderUsage`. New clients use `usage.list_reports` after checking `server_info.features.usageSources`.
-
-### Credentials are read only
-
-A source reads provider credentials without writing them. On 401 or 403 it returns `unavailable` and leaves refresh to the provider CLI. Redeeming a refresh token here would invalidate the CLI's copy; rewriting a parsed credential file could drop fields the source does not model.
+See the [public usage source reference](../public-docs/plugins/reference.md#usage-sources) for the
+contract, account and window identity, provider-derived period names, login fallback, and
+read-only credential rules. Usage adapters own the interpretation of provider fields; the app
+renders their names and resolves pins without provider-specific duration guesses.
 
 ---
 
